@@ -5264,9 +5264,10 @@ impl Device {
 
         log::debug!("configuring surface with {config:?}");
 
+        // User callbacks must not be called while we are holding locks. They
+        // must still be called when configuration fails after `maintain`.
+        let mut user_callbacks = UserClosures::default();
         let error = 'error: {
-            // User callbacks must not be called while we are holding locks.
-            let user_callbacks;
             {
                 if let Err(e) = self.check_is_valid() {
                     break 'error e.into();
@@ -5343,13 +5344,10 @@ impl Device {
                     self.maintain(wgt::PollType::wait_indefinitely(), snatch_guard);
 
                 match maintain_result {
-                    // We're happy
-                    Ok(wgt::PollStatus::QueueEmpty) => {}
-                    Ok(wgt::PollStatus::WaitSucceeded) => {
-                        // After the wait, the queue should be empty. It can only be non-empty
-                        // if another thread is submitting at the same time.
-                        break 'error E::GpuWaitTimeout;
-                    }
+                    // We're happy. The queue is not empty after the wait only
+                    // if another thread submitted during it. That work cannot
+                    // use the surface texture: none is acquired (checked below).
+                    Ok(wgt::PollStatus::QueueEmpty | wgt::PollStatus::WaitSucceeded) => {}
                     Ok(wgt::PollStatus::Poll) => {
                         unreachable!("Cannot get a Poll result from a Wait action.")
                     }
@@ -5409,6 +5407,7 @@ impl Device {
             return None;
         };
 
+        user_callbacks.fire();
         Some(error)
     }
 
