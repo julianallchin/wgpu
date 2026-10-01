@@ -5376,7 +5376,15 @@ impl Device {
                 // https://github.com/gfx-rs/wgpu/issues/4105
 
                 let surface_raw = surface.raw(self.backend()).unwrap();
-                match unsafe { surface_raw.configure(self.raw(), &hal_config) } {
+                let result = {
+                    // Swapchain teardown can wait for the device to be idle, which
+                    // requires the queue to be synchronized with submit and present
+                    // calls on other threads (Vulkan: `vkDeviceWaitIdle`). Writing
+                    // `command_indices` blocks them, as in `Queue::present`.
+                    let _command_indices = self.command_indices.write();
+                    unsafe { surface_raw.configure(self.raw(), &hal_config) }
+                };
+                match result {
                     Ok(()) => (),
                     Err(error) => {
                         break 'error match error {
